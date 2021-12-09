@@ -53,6 +53,7 @@ func main() {
 		".css":  "text/css",
 		".html": "text/html",
 		".svg":  "image/svg+xml",
+		".ico":  "image/x-icon",
 	}
 
 	defaultDoc := filepath.Join(args.Positional.Directory, args.DefaultDoc)
