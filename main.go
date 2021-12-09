@@ -62,6 +62,11 @@ func main() {
 	}
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(200)
+			return
+		}
+
 		// parse URL down to the file being asked for
 		path := r.URL.Path
 		origPath := path
@@ -86,7 +91,10 @@ func main() {
 				}
 				clr("%s => %s (%s)", origPath, relPath, entry.ContentType)
 				w.Header().Add("Content-Type", entry.ContentType)
-				_, _ = w.Write(entry.Content)
+				w.Header().Add("Content-Length", strconv.Itoa(len(entry.Content)))
+				if r.Method != http.MethodHead {
+					_, _ = w.Write(entry.Content)
+				}
 
 				return
 			}
@@ -138,15 +146,17 @@ func main() {
 			}
 		}
 
-		fmt.Printf("%s => %s", origPath, relPath)
 		if args.MemCache {
-			fmt.Printf("(%s)", color.MagentaString("added to cache"))
+			fmt.Printf("%s => %s (%s)\n", origPath, relPath, color.MagentaString("added to cache"))
+		} else {
+			fmt.Printf("%s => %s\n", origPath, relPath)
 		}
 
-		fmt.Println()
-
 		w.Header().Add("Content-Type", contentType)
-		_, _ = w.Write(raw)
+		w.Header().Add("Content-Length", strconv.Itoa(len(raw)))
+		if r.Method != http.MethodHead {
+			_, _ = w.Write(raw)
+		}
 	})
 
 	srv := &http.Server{
