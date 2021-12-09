@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/fatih/color"
 	"github.com/jessevdk/go-flags"
@@ -47,14 +48,13 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	cache := map[string]CacheEntry{}
-	types := map[string]string{
-		".js":   "application/javascript",
-		".css":  "text/css",
-		".html": "text/html",
-		".svg":  "image/svg+xml",
-		".ico":  "image/x-icon",
-	}
+	cache := &sync.Map{} // map[string]CacheEntry{}
+	types := &sync.Map{} // map[string]string{}
+	types.Store(".js", "application/javascript")
+	types.Store(".css", "text/css")
+	types.Store(".html", "text/html")
+	types.Store(".svg", "image/svg+xml")
+	types.Store(".ico", "image/x-icon")
 
 	defaultDoc := filepath.Join(args.Positional.Directory, args.DefaultDoc)
 	if !strings.HasPrefix(defaultDoc, args.Positional.Directory) {
@@ -84,14 +84,18 @@ func main() {
 
 		// check if we have a cached version
 		if args.MemCache {
-			if entry, ok := cache[fullpath]; ok {
+			if cached, ok := cache.Load(fullpath); ok {
+				entry := cached.(*CacheEntry)
+
 				clr := color.Green // used a cached version
 				if origPath != relPath {
 					clr = color.Yellow // corrected to default doc
 				}
+
 				clr("%s => %s (%s)", origPath, relPath, entry.ContentType)
 				w.Header().Add("Content-Type", entry.ContentType)
 				w.Header().Add("Content-Length", strconv.Itoa(len(entry.Content)))
+
 				if r.Method != http.MethodHead {
 					_, _ = w.Write(entry.Content)
 				}
@@ -125,8 +129,10 @@ func main() {
 			return
 		}
 
+		var contentType string
 		ext := filepath.Ext(fullpath)
-		contentType, ok := types[ext]
+
+		t, ok := types.Load(ext)
 		if !ok {
 			length := len(raw)
 			if length > 512 {
@@ -134,22 +140,32 @@ func main() {
 			}
 
 			contentType := http.DetectContentType(raw[:length])
-			if contentType != "application/octet-stream" {
-				types[ext] = contentType
+			if contentType != "application/octet-stream" && len(ext) != 0 {
+				types.Store(ext, contentType)
 			}
+		} else {
+			contentType = t.(string)
 		}
 
 		if args.MemCache {
-			cache[fullpath] = CacheEntry{
+			cache.Store(fullpath, &CacheEntry{
 				Content:     raw,
 				ContentType: contentType,
-			}
+			})
 		}
 
 		if args.MemCache {
-			fmt.Printf("%s => %s (%s)\n", origPath, relPath, color.MagentaString("added to cache"))
+			if origPath == relPath {
+				fmt.Printf("%s => %s (%s)\n", origPath, relPath, color.MagentaString("added to cache"))
+			} else {
+				color.Yellow("%s => %s (%s)\n", origPath, relPath, color.MagentaString("added to cache"))
+			}
 		} else {
-			fmt.Printf("%s => %s\n", origPath, relPath)
+			if origPath == relPath {
+				fmt.Printf("%s => %s\n", origPath, relPath)
+			} else {
+				color.Yellow("%s => %s\n", origPath, relPath)
+			}
 		}
 
 		w.Header().Add("Content-Type", contentType)
