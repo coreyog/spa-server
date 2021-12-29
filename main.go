@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io/ioutil"
+	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/dustin/go-humanize"
 	"github.com/fatih/color"
 	"github.com/jessevdk/go-flags"
 )
@@ -24,6 +26,7 @@ type Arguments struct {
 	DefaultDoc string `short:"d" long:"default-doc" description:"On 404, return this document" default:"index.html"`
 	Port       int    `short:"p" long:"port" description:"Port to listen on" default:"80"`
 	MemCache   bool   `short:"c" long:"cache" description:"Enable memcache"`
+	PreCache   bool   `long:"pre" description:"Pre-cache all files before serving"`
 	Positional struct {
 		Directory string `positional-arg-name:"DIR" description:"Directory to host" required:"true"`
 	} `positional-args:"yes"`
@@ -46,15 +49,22 @@ func main() {
 		panic(err)
 	}
 
-	mux := http.NewServeMux()
-
 	cache := &sync.Map{} // map[string]CacheEntry{}
 	types := &sync.Map{} // map[string]string{}
-	types.Store(".js", "application/javascript")
-	types.Store(".css", "text/css")
-	types.Store(".html", "text/html")
-	types.Store(".svg", "image/svg+xml")
-	types.Store(".ico", "image/x-icon")
+
+	if args.PreCache {
+		args.MemCache = true // if pre-caching, we are definitely caching
+		fmt.Print("pre-cacheing...")
+		size, err := precache(cache, types, args.Positional.Directory)
+		if err != nil {
+			fmt.Println()
+			panic(err)
+		}
+
+		color.Green(humanize.Bytes(size))
+	}
+
+	mux := http.NewServeMux()
 
 	defaultDoc := filepath.Join(args.Positional.Directory, args.DefaultDoc)
 	if !strings.HasPrefix(defaultDoc, args.Positional.Directory) {
@@ -132,19 +142,26 @@ func main() {
 		var contentType string
 		ext := filepath.Ext(fullpath)
 
-		t, ok := types.Load(ext)
-		if !ok {
-			length := len(raw)
-			if length > 512 {
-				length = 512
-			}
+		if len(ext) > 0 {
+			t, ok := types.Load(ext)
+			if !ok {
+				contentType = mime.TypeByExtension(ext)
 
-			contentType := http.DetectContentType(raw[:length])
-			if contentType != "application/octet-stream" && len(ext) != 0 {
-				types.Store(ext, contentType)
+				if len(contentType) == 0 {
+					length := len(raw)
+					if length > 512 {
+						length = 512
+					}
+
+					contentType = http.DetectContentType(raw[:length])
+				}
+
+				if contentType != "application/octet-stream" {
+					types.Store(ext, contentType)
+				}
+			} else {
+				contentType = t.(string)
 			}
-		} else {
-			contentType = t.(string)
 		}
 
 		if args.MemCache {
@@ -182,4 +199,63 @@ func main() {
 
 	fmt.Printf("now listening on %s\n", srv.Addr)
 	_ = srv.ListenAndServe()
+}
+
+func precache(cache *sync.Map, types *sync.Map, dir string) (size uint64, err error) {
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		panic(err)
+	}
+
+	for _, file := range files {
+		if file.IsDir() {
+			s, err := precache(cache, types, filepath.Join(dir, file.Name()))
+			if err != nil {
+				return 0, err
+			}
+
+			size += s
+		} else {
+			fullpath := filepath.Join(dir, file.Name())
+
+			raw, err := ioutil.ReadFile(fullpath)
+			if err != nil {
+				panic(err)
+			}
+
+			size += uint64(len(raw))
+
+			var contentType string
+			ext := filepath.Ext(fullpath)
+
+			if len(ext) > 0 {
+				t, ok := types.Load(ext)
+				if !ok {
+					contentType = mime.TypeByExtension(ext)
+
+					if len(contentType) == 0 {
+						length := len(raw)
+						if length > 512 {
+							length = 512
+						}
+
+						contentType = http.DetectContentType(raw[:length])
+					}
+
+					if contentType != "application/octet-stream" {
+						types.Store(ext, contentType)
+					}
+				} else {
+					contentType = t.(string)
+				}
+			}
+
+			cache.Store(fullpath, &CacheEntry{
+				Content:     raw,
+				ContentType: contentType,
+			})
+		}
+	}
+
+	return size, nil
 }
