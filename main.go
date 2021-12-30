@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/dustin/go-humanize"
 	"github.com/fatih/color"
@@ -26,7 +27,7 @@ type Arguments struct {
 	DefaultDoc string `short:"d" long:"default-doc" description:"On 404, return this document" default:"index.html"`
 	Port       int    `short:"p" long:"port" description:"Port to listen on" default:"80"`
 	MemCache   bool   `short:"c" long:"cache" description:"Enable memcache"`
-	PreCache   bool   `long:"pre" description:"Pre-cache all files before serving"`
+	LoadCache  bool   `short:"l" long:"load" description:"Load all files into the cache before serving (enables memcache)"`
 	Positional struct {
 		Directory string `positional-arg-name:"DIR" description:"Directory to host" required:"true"`
 	} `positional-args:"yes"`
@@ -52,16 +53,20 @@ func main() {
 	cache := &sync.Map{} // map[string]CacheEntry{}
 	types := &sync.Map{} // map[string]string{}
 
-	if args.PreCache {
+	if args.LoadCache {
 		args.MemCache = true // if pre-caching, we are definitely caching
 		fmt.Print("pre-cacheing...")
+
+		start := time.Now()
 		size, err := precache(cache, types, args.Positional.Directory)
+		dur := time.Since(start)
+
 		if err != nil {
 			fmt.Println()
 			panic(err)
 		}
 
-		color.Green(humanize.Bytes(size))
+		color.Green("%s (%s)", humanize.Bytes(size), dur)
 	}
 
 	mux := http.NewServeMux()
